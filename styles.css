@@ -19,12 +19,14 @@ button { touch-action: manipulation; }
 #game {
   min-height: 100vh;
   min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   position: relative;
   isolation: isolate;
 }
 
 #view {
-  min-height: inherit;
+  flex: 1;
   display: flex;
   flex-direction: column;
 }
