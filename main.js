@@ -1,11 +1,12 @@
 import {chapter, endings, hook, locations, names} from './game/chapter.mjs';
-import {advance, choose, current, decodeSave, encodeSave, SAVE_KEY, SETTINGS_KEY, start} from './game/engine.mjs';
+import {advance, choose, decodeSave, encodeSave, SAVE_KEY, SETTINGS_KEY, start, storyFrame} from './game/engine.mjs';
 import {graphic, hasAudio, resourceUrl} from './game/media.mjs';
 import {Soundscape} from './game/audio.mjs';
 
 const game = document.querySelector('#game');
 const view = document.querySelector('#view');
 const notice = document.querySelector('#notice');
+const rewindNotice = document.querySelector('#rewind-notice');
 const motion = matchMedia('(prefers-reduced-motion: reduce)');
 const mixer = new Soundscape();
 const speeds = {slow: 36, normal: 19, fast: 9, instant: 0};
@@ -16,8 +17,10 @@ let nextTap = 0;
 let rawSave = null;
 let state = null;
 let noticeText = '';
-let settings = {tutorialSeen: false, speed: 'normal', volume: 0.65};
+let settings = {tutorialSeen: false, rewindSeen: false, speed: 'normal', volume: 0.65};
 let story = null;
+let reviewOffset = 0;
+let soundedStep = -1;
 let shownStep = -1;
 let finished = false;
 let typingFrame = 0;
@@ -78,6 +81,7 @@ function readStorage() {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
     if (stored && Object.prototype.hasOwnProperty.call(speeds, stored.speed)) settings.speed = stored.speed;
     if (stored?.tutorialSeen === true) settings.tutorialSeen = true;
+    if (stored?.rewindSeen === true) settings.rewindSeen = true;
     if (typeof stored?.volume === 'number' && stored.volume >= 0 && stored.volume <= 1) settings.volume = stored.volume;
   } catch {
     // Settings may be reset independently of story progress.
@@ -203,12 +207,15 @@ function mountStory() {
   const pause = control('', 'pause', 'pause-control');
   pause.setAttribute('aria-label', 'Пауза');
   pause.append(element('span', 'pause-icon'));
-  top.append(place, pause);
+  const actions = element('div', 'scene-actions');
+  const rewind = control('Назад', 'rewind', 'rewind-control');
+  actions.append(rewind, pause);
+  top.append(place, actions);
 
   const content = element('div', 'story-content');
   frame.append(scenery, top, content);
   view.append(frame);
-  story = {frame, scenery, backdrop, portrait, place, content, location: null, art: null, character: null};
+  story = {frame, scenery, backdrop, portrait, place, rewind, content, location: null, art: null};
 }
 
 function endTyping() {
@@ -247,13 +254,11 @@ function typeText(text, display, next) {
 
 function renderStory() {
   if (!story) mountStory();
-  const scene = chapter[state.node];
-  const location = scene.location;
-  const item = current(state);
+  const {item, location, character, emotion} = storyFrame(state, reviewOffset);
+  story.rewind.disabled = reviewOffset >= state.readFrames.length;
   const illustration = item.kind === 'illustration';
   const art = illustration ? `illustration:${item.art}` : `background:${location}`;
   if (story.location !== location || story.art !== art) {
-    story.character = null;
     story.scenery.classList.remove('enter');
     // New frames reuse the backdrop so taps do not reload the scene art.
     void story.scenery.offsetWidth;
@@ -267,22 +272,8 @@ function renderStory() {
   story.frame.dataset.location = location;
   story.frame.dataset.kind = item.kind;
 
-  // Keep the scene partner visible on Kirill's reply and on beats without a new focus.
-  const focus = item.focus || item.speaker;
-  let person = illustration ? null : focus && focus !== 'K' ? focus : story.character;
-  if (!person && !illustration) {
-    for (let index = state.log.length - 1; index >= 0; index--) {
-      const entry = state.log[index];
-      if (entry.location !== location || entry.kind === 'illustration') break;
-      const actor = entry.focus || entry.speaker;
-      if (actor && actor !== 'K') {
-        person = actor;
-        break;
-      }
-    }
-  }
-  const portrait = person && person !== 'K' && !illustration
-    ? `portrait:${person}:${item.emotion ?? 'neutral'}` : null;
+  const portrait = character && character !== 'K' && !illustration
+    ? `portrait:${character}:${emotion ?? 'neutral'}` : null;
   const oldSrc = story.portrait.src;
   setImage(story.portrait, portrait);
   if (!story.portrait.hidden && oldSrc !== story.portrait.src) {
@@ -290,7 +281,6 @@ function renderStory() {
     void story.portrait.offsetWidth;
     story.portrait.classList.add('appear');
   }
-  story.character = person;
 
   if (shownStep !== state.step) {
     shownStep = state.step;
@@ -301,11 +291,12 @@ function renderStory() {
   card.setAttribute('aria-live', 'polite');
   if (item.speaker) card.append(element('p', 'speaker', names[item.speaker]));
   const copy = element('div', 'beat-text');
-  const reserve = element('span', 'reserve', item.text || '…');
-  reserve.setAttribute('aria-hidden', 'true');
-  const display = element('span', 'display', item.text || '…');
-  display.setAttribute('aria-hidden', 'true');
-  copy.append(element('span', 'sr-only', item.text || 'Пауза'), reserve, display);
+  if (item.kind === 'choice') copy.textContent = item.text;
+  else {
+    const reserve = element('span', 'reserve', item.text || '…');
+    reserve.setAttribute('aria-hidden', 'true');
+    copy.append(element('span', 'sr-only', item.text || 'Пауза'), reserve);
+  }
   card.append(copy);
   story.content.append(card);
 
@@ -317,10 +308,19 @@ function renderStory() {
     const next = control('', 'advance', 'advance');
     next.append(element('span', 'advance-icon'));
     story.content.append(next);
-    display.textContent = finished || motion.matches || !speeds[settings.speed] ? item.text : '';
-    typeText(item.text || '…', display, next);
+    const display = element('span', 'display');
+    display.setAttribute('aria-hidden', 'true');
+    copy.append(display);
+    if (reviewOffset > 0) {
+      display.textContent = item.text || '…';
+      next.classList.add('ready');
+      next.setAttribute('aria-label', 'Далее');
+    } else {
+      typeText(item.text || '…', display, next);
+    }
   }
-  syncAudio(item);
+  story.content.scrollTop = 0;
+  syncAudio(reviewOffset === 0 ? item : null);
 }
 
 function syncAudio(item) {
@@ -334,9 +334,9 @@ function syncAudio(item) {
   const location = chapter[state.node].location;
   mixer.loop('music', location === 'dawn' ? 'reveal' : 'score');
   mixer.loop('ambience', locations[location].audio);
-  if (item?.sound) {
-    const step = state.step;
-    mixer.effect(item.sound, () => screen === 'story' && state.step === step && !document.hidden);
+  if (item?.sound && soundedStep !== state.step) {
+    const step = soundedStep = state.step;
+    mixer.effect(item.sound, () => screen === 'story' && reviewOffset === 0 && state.step === step && !document.hidden);
   }
 }
 
@@ -349,7 +349,9 @@ function render() {
     if (changed) view.replaceChildren();
     const focused = view.contains(document.activeElement) && document.activeElement.closest('[data-action]');
     renderStory();
-    if (focused && !view.contains(focused)) story.content.querySelector('button')?.focus({preventScroll: true});
+    if (focused && (focused.disabled || !view.contains(focused))) {
+      story.content.querySelector('button')?.focus({preventScroll: true});
+    }
     window.scrollTo(0, 0);
     return;
   }
@@ -396,23 +398,41 @@ function render() {
 function newGame() {
   state = start();
   shownStep = -1;
+  soundedStep = -1;
+  reviewOffset = 0;
   saveProgress();
   screen = settings.tutorialSeen ? 'story' : 'tutorial';
 }
 
 function handle(action, keyboard = false) {
+  if (rewindNotice.open) return;
   const now = performance.now();
   if (now < nextTap && (!keyboard || action.startsWith('choose:'))) return;
   nextTap = now + (action.startsWith('choose:') ? 290 : 180);
   mixer.unlock();
   if (action.startsWith('choose:')) {
+    if (reviewOffset > 0) return;
     const chosen = choose(state, action.slice(7));
     if (chosen === state) return;
     state = chosen;
     saveProgress();
   } else {
     switch (action) {
+      case 'rewind':
+        if (reviewOffset >= state.readFrames.length) return;
+        if (!settings.rewindSeen) {
+          rewindNotice.showModal();
+          return;
+        }
+        reviewOffset++;
+        break;
       case 'advance':
+        if (reviewOffset > 0) {
+          reviewOffset--;
+          if (reviewOffset === 0 && state.phase === 'choice') nextTap = now + 340;
+          break;
+        }
+        if (state.phase === 'choice') return;
         if (!finished) {
           endTyping();
           return;
@@ -454,7 +474,7 @@ function handle(action, keyboard = false) {
 view.addEventListener('click', event => {
   const button = event.target.closest('[data-action]');
   if (button) handle(button.dataset.action, event.detail === 0);
-  else if (screen === 'story' && state.phase !== 'choice' && event.target.closest('.cinema')) handle('advance');
+  else if (screen === 'story' && (reviewOffset > 0 || state.phase !== 'choice') && event.target.closest('.cinema')) handle('advance');
 });
 
 view.addEventListener('change', event => {
@@ -469,13 +489,24 @@ view.addEventListener('change', event => {
   renderNotice();
 });
 
+rewindNotice.addEventListener('cancel', event => event.preventDefault());
+rewindNotice.querySelector('button').addEventListener('click', () => {
+  settings.rewindSeen = true;
+  saveSettings();
+  rewindNotice.close();
+  nextTap = 0;
+  handle('rewind');
+  const focus = story.rewind.disabled ? story.content.querySelector('button') : story.rewind;
+  focus?.focus({preventScroll: true});
+});
+
 document.addEventListener('keydown', event => {
-  if (event.repeat || event.altKey || event.metaKey || event.ctrlKey) return;
+  if (rewindNotice.open || event.repeat || event.altKey || event.metaKey || event.ctrlKey) return;
   if (event.key === 'Escape' && screen === 'story') handle('pause', true);
   else if (event.key === 'Escape' && screen === 'pause') handle('resume', true);
   else if (event.key === 'Escape' && screen === 'history') handle('pause', true);
   else if (event.key === 'Escape' && screen === 'settings') handle('settings-back', true);
-  else if (screen === 'story' && state.phase !== 'choice' && event.key === ' '
+  else if (screen === 'story' && (reviewOffset > 0 || state.phase !== 'choice') && event.key === ' '
     && !event.target.closest('button, input, select')) {
     event.preventDefault();
     handle('advance', true);

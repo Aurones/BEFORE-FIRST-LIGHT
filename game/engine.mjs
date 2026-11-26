@@ -16,7 +16,7 @@ function enter(state, node) {
 
 export function start() {
   return enter({
-    step: 0, history: [], log: [], P: 0, J: 0, honest: false, lies: {}, romantic: [],
+    step: 0, history: [], log: [], readFrames: [], P: 0, J: 0, honest: false, lies: {}, romantic: [],
     relationships: Object.fromEntries(people.map(person =>
       [person, {attraction: 0, trust: 0, hurt: 0, closeness: 0}])),
     promises: [], companion: null, route: null, weekend: null
@@ -26,10 +26,40 @@ export function start() {
 export function current(state) {
   if (state.phase === 'choice') {
     const item = chapter[state.node];
-    return {kind: 'choice', text: resolve(item.prompt, state), choices: item.choices.map(option =>
-      ({id: option.id, text: resolve(option.text, state)}))};
+    const beats = [...state.beats].reverse();
+    const context = state.node === 'photo' ? beats.find(beat => beat.kind === 'action')
+      : state.node === 'invite' ? beats.find(beat => beat.kind === 'thought')
+        : beats.find(beat => beat.kind === 'line' && beat.speaker !== 'K');
+    const last = context ?? beats.find(beat => beat.kind !== 'pause' && beat.text);
+    return {kind: 'choice', text: last.text, speaker: last.speaker ?? last.focus ?? 'K',
+      emotion: last.emotion, choices: item.choices.map(option =>
+        ({id: option.id, text: resolve(option.text, state)}))};
   }
   return state.beats[state.cursor] ?? null;
+}
+
+export function storyFrame(state, back = 0) {
+  if (state.phase === 'end' || !Number.isInteger(back) || back < 0 || back > state.readFrames.length) return null;
+  if (back > 0) return state.readFrames[state.readFrames.length - back];
+
+  const item = current(state);
+  const location = chapter[state.node].location;
+  let character = item.focus ?? item.speaker;
+  let emotion = item.emotion;
+  if (!character || character === 'K') {
+    character = null;
+    for (let index = state.log.length - 1; index >= 0; index--) {
+      const entry = state.log[index];
+      if (entry.location !== location || entry.kind === 'illustration') break;
+      const actor = entry.focus ?? entry.speaker;
+      if (actor && actor !== 'K') {
+        character = actor;
+        emotion = entry.emotion;
+        break;
+      }
+    }
+  }
+  return {item, location, character, emotion};
 }
 
 export function canInvite(state, person) {
@@ -145,16 +175,18 @@ export function choose(state, id) {
       : line(person, {L: 'Да. Только отойдём от двери.', S: 'Пойдём. Мне как раз надо проветриться.', N: 'Да. Давай пойдём к воде.'}[person]));
   }
   const selected = {kind: 'selected', speaker: 'K', text};
-  return {...result, phase: 'reply', cursor: 0, next,
+  return {...result, phase: 'reply', cursor: 0, next, readFrames: [],
     beats: [selected, ...replies, ...resolve(option.reply, result)]};
 }
 
 export function advance(state) {
   if (state.phase !== 'story' && state.phase !== 'reply') return state;
-  const item = current(state);
+  const frame = storyFrame(state);
+  const item = frame.item;
   const entry = item.text ? {location: chapter[state.node].location, kind: item.kind,
-    speaker: item.speaker, focus: item.focus, text: item.text} : null;
+    speaker: item.speaker, focus: item.focus, emotion: item.emotion, text: item.text} : null;
   const following = {...state, step: state.step + 1, cursor: state.cursor + 1,
+    readFrames: [...state.readFrames, frame],
     log: entry ? [...state.log, entry] : state.log};
   if (following.cursor < following.beats.length) return following;
   if (following.phase === 'story') return {...following, phase: 'choice'};

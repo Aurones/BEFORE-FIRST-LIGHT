@@ -41,6 +41,13 @@ body { margin: 0; }
   min-height: 100dvh;
 }
 #view, .menu, .cinema { flex: 1; min-width: 0; }
+#game[data-view="story"] {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+#game[data-view="story"] #view, .cinema { min-height: 0; }
 #notice {
   margin: 0;
   z-index: 2;
@@ -104,11 +111,14 @@ h1:focus { outline: none; }
 }
 .menu-hero {
   width: min(64%, 26rem);
-  height: auto;
-  top: 1.3%;
-  right: 4%;
-  -webkit-mask-image: radial-gradient(ellipse 51% 48% at 53% 43%, #000 53%, #000e 70%, transparent 100%);
-  mask-image: radial-gradient(ellipse 51% 48% at 53% 43%, #000 53%, #000e 70%, transparent 100%);
+  height: 62%;
+  top: 0;
+  right: 0;
+  object-fit: cover;
+  object-position: center 20%;
+  border-left: 1px solid #c4afb230;
+  -webkit-mask-image: linear-gradient(#000 76%, transparent 100%);
+  mask-image: linear-gradient(#000 76%, transparent 100%);
 }
 
 .menu-content, .panel {
@@ -143,7 +153,7 @@ h1:focus { outline: none; }
 }
 .menu-actions, .panel { display: grid; gap: 0.55rem; }
 
-.control, .choice {
+.control, button.choice {
   min-width: 44px;
   min-height: 46px;
   padding: 0.55rem 1rem;
@@ -232,9 +242,11 @@ h1:focus { outline: none; }
   max-width: min(60%, 17rem);
   max-height: min(48vh, 23rem);
   top: clamp(3rem, 12vh, 7rem);
-  right: 3%;
-  -webkit-mask-image: radial-gradient(ellipse 50% 50% at 50% 49%, #000 58%, #000e 75%, transparent 100%);
-  mask-image: radial-gradient(ellipse 50% 50% at 50% 49%, #000 58%, #000e 75%, transparent 100%);
+  right: var(--gutter-right);
+  object-fit: contain;
+  border: 1px solid #e4bac454;
+  border-radius: 0.2rem;
+  box-shadow: 0 0.5rem 1.8rem #100f144d;
 }
 .portrait.appear { animation: character-in 320ms ease both; }
 .illustration .scenery::after {
@@ -243,6 +255,7 @@ h1:focus { outline: none; }
 
 .scene-strip {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
@@ -256,7 +269,13 @@ h1:focus { outline: none; }
   font-weight: 700;
   overflow-wrap: anywhere;
 }
-.pause-control, .advance {
+.scene-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pause-control, .advance, .rewind-control {
   min-width: 44px;
   min-height: 44px;
   display: grid;
@@ -265,6 +284,18 @@ h1:focus { outline: none; }
   border: 1px solid #e4bac46a;
   background: #1d1721c9;
   border-radius: 50%;
+}
+.rewind-control {
+  padding-inline: 0.65rem;
+  border-radius: 0.4rem;
+  color: #fff0eb;
+  font-size: 0.8rem;
+}
+.rewind-control:disabled {
+  color: #c5b2bc;
+  border-color: #e4bac42d;
+  opacity: 0.58;
+  cursor: default;
 }
 .pause-icon {
   width: 0.65rem;
@@ -286,11 +317,12 @@ h1:focus { outline: none; }
 
 .story-content {
   width: min(100%, 44rem);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   margin: auto auto 0;
-  padding: 0 var(--gutter-right) var(--safe-bottom) var(--gutter-left);
+  padding: 0.25rem var(--gutter-right) var(--safe-bottom) var(--gutter-left);
 }
-.cinema[data-kind="choice"] .story-content { padding-top: clamp(7rem, 27vh, 15rem); }
-.cinema:not([data-kind="choice"]) .story-content { padding-top: clamp(10rem, 37vh, 21rem); }
 
 .beat-card {
   min-width: 0;
@@ -317,7 +349,12 @@ h1:focus { outline: none; }
 }
 .beat-card.thought, .beat-card.pause { color: #f0d6d1; font-style: italic; }
 .beat-card.event { border-color: #adb8d3bd; }
-.beat-card.choice { min-height: 0; padding: 0.55rem 0.8rem; color: var(--rose); }
+.beat-card.choice {
+  min-height: 0;
+  padding: 0.65rem 0.9rem;
+  font-size: 1rem;
+  overflow: visible;
+}
 .speaker {
   display: block;
   color: var(--rose);
@@ -328,7 +365,7 @@ h1:focus { outline: none; }
   margin: 0 0 0.3rem;
 }
 .choices { display: grid; gap: 0.4rem; margin-top: 0.55rem; animation: rise 220ms ease both; }
-.choice {
+button.choice {
   text-align: left;
   font-size: 0.96rem;
   overflow-wrap: anywhere;
@@ -338,7 +375,7 @@ h1:focus { outline: none; }
 }
 @media (hover: hover) {
   button:hover { border-color: #f9c1b8; }
-  .control:hover, .choice:hover { background: #503142; }
+  .control:hover, button.choice:hover { background: #503142; }
 }
 button:active { color: #fff; background: #5e3746; }
 
@@ -361,9 +398,10 @@ button:active { color: #fff; background: #5e3746; }
 
 @media (min-width: 740px) {
   .menu-content, .story-content { margin-left: clamp(2rem, 12vw, 14rem); }
+  .story-content { width: min(calc(100% - clamp(2rem, 12vw, 14rem)), 44rem); }
   .menu-content { padding-bottom: max(3rem, env(safe-area-inset-bottom)); }
   .menu-city { object-position: center 67%; }
-  .menu-hero { width: min(39%, 28rem); right: 11%; }
+  .menu-hero { width: min(46%, 38rem); height: 87%; right: 5%; }
   .portrait { right: 13%; max-width: min(34%, 23rem); max-height: min(50vh, 26rem); }
   .scene-strip { padding-inline: max(2rem, env(safe-area-inset-left)) max(2rem, env(safe-area-inset-right)); }
   .scenery::after {
@@ -372,12 +410,35 @@ button:active { color: #fff; background: #5e3746; }
   }
 }
 @media (orientation: landscape) and (max-height: 510px) {
-  .cinema[data-kind] .story-content { padding-top: 1.5rem; }
   .menu-content { padding-top: 2.6rem; }
   .title { font-size: 3.8rem; }
-  .menu-hero { width: 30%; right: 6%; }
-  .portrait { right: 4%; max-width: 28%; max-height: 62vh; }
+  .menu-hero { width: 38%; height: 100%; right: 0; }
+  .portrait { right: 4%; max-width: 28%; max-height: 47vh; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+#rewind-notice {
+  width: min(calc(100% - 2rem), 29rem);
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  padding: 1.4rem;
+  color: inherit;
+  border: 1px solid #b78e907d;
+  border-radius: 0.6rem;
+  background: linear-gradient(150deg, #382532, #1b1520 75%);
+  box-shadow: 0 1rem 3rem #0a060bc7;
+}
+#rewind-notice::backdrop { background: #0b080de0; }
+#rewind-notice .heading {
+  font-size: clamp(2rem, 8vw, 3rem);
+  line-height: 1;
+  margin-bottom: 1rem;
+}
+#rewind-notice .control {
+  margin-top: 0.8rem;
+  width: 100%;
+  text-align: center;
 }

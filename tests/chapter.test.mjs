@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {existsSync} from 'node:fs';
 import test from 'node:test';
 import {chapter, endings, locations, names} from '../game/chapter.mjs';
-import {advance, choose, current, decodeSave, encodeSave, start} from '../game/engine.mjs';
+import {advance, choose, current, decodeSave, encodeSave, start, storyFrame} from '../game/engine.mjs';
 import {graphic, graphics, hasAudio, sounds} from '../game/media.mjs';
 
 function play(selected, visit = () => {}, initial = start()) {
@@ -130,4 +130,48 @@ test('all placeholders resolve to existing WebP, missing audio stays silent', ()
   }
   assert.equal(hasAudio, false);
   assert.ok(Object.values(sounds).every(entry => entry.status === 'missing'));
+});
+
+
+test('choices keep the previous story context and speaker without changing the scenario', () => {
+  play(routes.N, (state, item) => {
+    if (item?.kind !== 'choice') return;
+    assert.ok(names[item.speaker]);
+    assert.ok(state.beats.some(beat => beat.text === item.text));
+    assert.notEqual(item.text, chapter[state.node].prompt);
+    if (state.node === 'photo') {
+      assert.equal(item.speaker, 'P');
+      assert.match(item.text, /старая фотография/);
+    }
+    if (state.node === 'friend') {
+      assert.equal(item.speaker, 'P');
+      assert.equal(item.text, 'Кирюх, если серьёзно. Как ты?');
+    }
+  });
+});
+
+test('review is read-only, bounded by the last choice, and restored from existing saves', () => {
+  for (const choices of Object.values(routes)) {
+    play(choices, (state, item) => {
+      if (!item) {
+        assert.equal(storyFrame(state), null);
+        assert.equal(storyFrame(state, 1), null);
+        return;
+      }
+
+      const saved = encodeSave(state);
+      const checkpoint = state.readFrames.length;
+      if (item.kind === 'selected') assert.equal(checkpoint, 0);
+      assert.equal(storyFrame(state, checkpoint + 1), null);
+      assert.equal(storyFrame(state, -1), null);
+      assert.equal(storyFrame(state).item.kind, item.kind);
+      for (let back = 1; back <= checkpoint; back++) {
+        const frame = storyFrame(state, back);
+        assert.ok(frame && frame.item.kind !== 'choice');
+        if (frame.item.kind === 'selected') assert.equal(back, checkpoint);
+      }
+      assert.equal(encodeSave(state), saved);
+      assert.deepEqual(decodeSave(saved).state.readFrames, state.readFrames);
+    });
+  }
 });
