@@ -1,137 +1,133 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import {chapter, endings, locations, portraits} from '../game/chapter.mjs';
-import {advance, availableChoices, brokePromiseTo, canInvite, choose, decodeSave,
-  encodeSave, start} from '../game/engine.mjs';
 import {existsSync} from 'node:fs';
+import test from 'node:test';
+import {chapter, endings, locations, names} from '../game/chapter.mjs';
+import {advance, choose, current, decodeSave, encodeSave, start} from '../game/engine.mjs';
+import {graphic, graphics, hasAudio, sounds} from '../game/media.mjs';
 
-test('valid scene graph, choice IDs and local artwork', () => {
-  const ids = new Set();
-  for (const scene of Object.values(chapter)) {
-    assert.ok(locations[scene.location]);
-    assert.ok(scene.text.length);
-    assert.ok(scene.choices.length >= 2);
-    for (const choice of scene.choices) {
-      assert.ok(!ids.has(choice.id), choice.id);
-      ids.add(choice.id);
-      assert.ok(choice.next === 'end' || chapter[choice.next], choice.id);
-    }
+function play(selected, visit = () => {}, initial = start()) {
+  let state = initial;
+  while (state.phase !== 'end') {
+    assert.ok(state.step < 300, 'Story did not terminate');
+    const item = current(state);
+    assert.ok(item);
+    visit(state, item);
+    const next = item.kind === 'choice'
+      ? choose(state, state.node in selected ? `${state.node}:${selected[state.node]}` : item.choices[0].id)
+      : advance(state);
+    assert.notEqual(next, state, state.node);
+    state = next;
   }
-  for (const file of ['kirill', ...Object.values(portraits), ...Object.values(locations).map(item => item.image)]) {
-    assert.ok(existsSync(new URL(`../assets/${file}.webp`, import.meta.url)), file);
-  }
-});
-
-test('all reachable transitions, refusal paths and four endings without dead ends', () => {
-  const visitedChoices = new Set();
-  const observedEndings = new Set();
-  const invitations = new Set();
-  const observedNodes = new Set();
-  let frontier = [start()];
-  let transitions = 0;
-
-  // Trust, honesty, and previous choice text have no effect on future routing.
-  // Keep one representative per state with the same future-relevant inputs.
-  const equivalent = state => JSON.stringify(state.route
-    ? [state.node, state.route, state[state.route], state.promises]
-    : [state.node, state.L, state.S, state.N, state.J, state.companion, state.promise, state.promises]);
-
-  for (let depth = 0; depth < 30; depth++) {
-    const successors = new Map();
-    for (const state of frontier) {
-      observedNodes.add(state.node);
-      const choices = availableChoices(state);
-      assert.ok(choices.length);
-      for (const choice of choices) {
-        visitedChoices.add(choice.id);
-        const response = choose(state, choice.id);
-        transitions++;
-        assert.equal(response.phase, 'response');
-        assert.equal(choose(response, choice.id), response);
-        if (state.node === '21') invitations.add(`${choice.effects.invite}:${response.route}`);
-        const following = advance(response);
-        assert.equal(following.history.length, depth + 1);
-        if (depth === 29) {
-          assert.equal(following.phase, 'end');
-          assert.ok(endings[following.route]);
-          assert.equal(following.weekend, choice.id);
-          observedEndings.add(following.route);
-        } else {
-          assert.equal(following.phase, 'scene');
-          successors.set(equivalent(following), following);
-        }
-      }
-    }
-    frontier = [...successors.values()];
-  }
-
-  assert.equal(observedNodes.size, Object.keys(chapter).length);
-  assert.equal(visitedChoices.size, Object.values(chapter).flatMap(scene => scene.choices).length);
-  assert.deepEqual([...observedEndings].sort(), ['L', 'N', 'O', 'S']);
-  assert.deepEqual([...invitations].sort(), ['L:L', 'L:O', 'N:N', 'N:O', 'O:O', 'S:O', 'S:S']);
-  console.log(`${observedNodes.size} узлов · ${visitedChoices.size} вариантов · ${transitions} переходов`);
-});
-
-function walk(overrides, stopAt) {
-  let state = start();
-  assert.deepEqual(decodeSave(encodeSave(state)), state);
-  while (!['end', stopAt].includes(state.node)) {
-    const choices = availableChoices(state);
-    const choiceId = overrides[state.node] ?? choices[0].id;
-    const response = choose(state, choiceId);
-    assert.deepEqual(decodeSave(encodeSave(response)), response);
-    state = advance(response);
-    assert.deepEqual(decodeSave(encodeSave(state)), state);
-  }
+  visit(state, null);
   return state;
 }
 
-test('valid saves restore each decision, reply, ending and weekend choice', () => {
-  for (const [choice, route] of Object.entries({nastya: 'N', sonya: 'S', lera: 'L', alone: 'O'})) {
-    const state = walk({'17': '17-nastya', '21': `21-${choice}`, '30': '30-think'});
-    assert.equal(state.route, route);
-    assert.equal(state.weekend, '30-think');
+const routes = {
+  N: {floor: 'nastya', invite: 'nastya', 'nastya-hand': 'hand'},
+  S: {floor: 'sonya', invite: 'sonya', 'sonya-contact': 'kiss'},
+  L: {floor: 'lera', invite: 'lera', 'lera-present': 'missed'},
+  O: {floor: 'pasha', invite: 'alone'}
+};
+
+test('whole chapter: all routes, dialogue history and save restore at every beat', () => {
+  const visited = new Set();
+  for (const [person, choices] of Object.entries(routes)) {
+    const result = play(choices, (state, item) => {
+      visited.add(state.node);
+      assert.deepEqual(decodeSave(encodeSave(state)), {status: 'valid', state});
+      if (item?.kind === 'choice') {
+        assert.equal(advance(state), state);
+        assert.equal(choose(state, 'invalid-choice'), state);
+      } else if (item) {
+        assert.equal(choose(state, 'photo:keep'), state);
+        if (item.speaker) assert.ok(names[item.speaker]);
+        if (item.focus) assert.ok(names[item.focus]);
+        if (item.art) assert.ok(graphic(`illustration:${item.art}`));
+        if (item.sound) assert.ok(sounds[item.sound]);
+      }
+    });
+    assert.equal(result.route, person);
+    assert.ok(endings[person].length > 0);
+    assert.equal(result.history.length, person === 'O' ? 17 : 19);
+    assert.equal(result.weekend, 'go');
+    assert.ok(result.log.length > result.history.length * 5);
+    console.log(`${person}: ${result.history.length} решений, ${result.log.length} сюжетных фрагментов`);
   }
+  assert.deepEqual([...visited].sort(), [...Object.keys(chapter), 'end'].sort());
+});
+
+test('every authored option terminates and applies only once', () => {
+  const seen = new Set();
+  for (const choices of Object.values(routes)) {
+    play(choices, (state, item) => {
+      if (item?.kind !== 'choice') return;
+      for (const option of item.choices) {
+        seen.add(option.id);
+        const response = choose(state, option.id);
+        assert.equal(response.phase, 'reply');
+        assert.equal(choose(response, option.id), response);
+        assert.equal(response.step, state.step + 1);
+        assert.equal(response.history.at(-1), option.id);
+        assert.equal(play(choices, () => {}, response).phase, 'end');
+      }
+    });
+  }
+  const declared = Object.values(chapter).flatMap(item => item.choices.map(option => option.id));
+  assert.equal(new Set(declared).size, declared.length);
+  assert.deepEqual([...seen].sort(), declared.sort());
+  console.log(`${seen.size} вариантов решений`);
+});
+
+test('broken and kept promises preserve each recipient and react after reload', () => {
+  const broken = play({...routes.N, 'nastya-plan': 'promise', 'sonya-plan': 'promise'});
+  assert.deepEqual(broken.promises.map(({person, status}) => [person, status]), [['N', 'broken'], ['S', 'broken']]);
+  assert.match(broken.log.map(entry => entry.text).join('\n'), /Ты же обещал.*Ладно/);
+  assert.ok(broken.log.some(entry => entry.text.includes('Я немного подождала')));
+  const kept = play({...routes.S, 'nastya-plan': 'promise', 'sonya-plan': 'promise'});
+  assert.deepEqual(kept.promises.map(({person, status}) => [person, status]), [['N', 'broken'], ['S', 'kept']]);
+  assert.equal(kept.relationships.S.hurt, 0);
+  assert.ok(!kept.log.some(entry => entry.text.includes('запасным вариантом')));
+});
+
+test('lies, consent, and refusal have narrative consequences', () => {
+  const sonya = play({...routes.S, 'sonya-truth': 'lie', 'sonya-trust': 'open'});
+  assert.equal(sonya.lies.S, 'admitted');
+  assert.ok(sonya.log.some(entry => entry.text.includes('А потом я увидела')));
+  assert.deepEqual(sonya.romantic.at(-1), {person: 'S', kind: 'kiss', accepted: true});
+  const guarded = play({...routes.N, floor: 'pasha', 'nastya-open': 'private', 'nastya-repair': 'dismiss'});
+  assert.deepEqual(guarded.romantic.at(-1), {person: 'N', kind: 'hand', accepted: false});
+  assert.ok(!guarded.log.some(entry => entry.text.includes('вкладывает руку')));
+  for (const [invite, overrides] of [
+    ['nastya', {'nastya-intro': 'closed', 'nastya-plan': 'bye'}],
+    ['sonya', {'sonya-truth': 'boundary', 'sonya-plan': 'no'}],
+    ['lera', {photo: 'discard', taxi: 'avoid', reunion: 'no'}]
+  ]) {
+    const result = play({floor: 'pasha', invite, ...overrides});
+    assert.equal(result.route, 'O');
+    assert.ok(result.log.some(entry => entry.text === 'Не сегодня, Кирилл.'));
+  }
+  const highTension = play({taxi: 'press', 'pasha-club': 'knew', floor: 'lera', artem: 'push', invite: 'lera'});
+  assert.equal(highTension.route, 'O');
+});
+
+test('saves reject damaged replays without silently asking for a replacement', () => {
+  assert.equal(decodeSave(null).status, 'empty');
+  const old = '{"version":1,"phase":"response","history":["1-go"]}';
+  assert.deepEqual(decodeSave(old), {status: 'legacy', state: null});
   for (const raw of [
-    null, '{', 'null', '[]', '{"version":0,"phase":"scene","history":[]}',
-    '{"version":1,"phase":"end","history":["1-go"]}', '{"version":1,"phase":"response","history":[]}',
-    '{"version":1,"phase":"scene","history":["2-hide"]}', '{"version":1,"phase":"scene","history":["1-go",2]}'
-  ]) assert.equal(decodeSave(raw), null);
+    '{', 'null', '{}', '[]', '{"version":3,"step":0,"history":[]}',
+    '{"version":2,"step":513,"history":[]}', '{"version":2,"step":1,"history":[2]}',
+    '{"version":2,"step":5,"history":["photo:keep"]}', '{"version":2,"step":25,"history":[]}'
+  ]) assert.equal(decodeSave(raw).status, 'invalid');
 });
 
-test('overwritten, kept and broken promises retain their recipients and consequences', () => {
-  const overrides = {'8': '8-promise', '12': '12-promise', '17': '17-nastya'};
-  const before = walk(overrides, '17');
-  assert.equal(before.promise, 'S');
-  assert.equal(brokePromiseTo(before, 'N'), true);
-  assert.equal(brokePromiseTo(before, 'S'), false);
-  const broken = choose(before, '17-nastya');
-  assert.equal(broken.S, before.S - 2);
-  assert.equal(broken.N, before.N + 2);
-  assert.equal(broken.broken, true);
-  assert.deepEqual(broken.response.replies[0], {speaker: 'S', text: 'Ты же обещал. Ладно'});
-  assert.equal(brokePromiseTo(broken, 'S'), true);
-  const kept = choose(before, '17-sonya');
-  assert.equal(kept.promises.at(-1).status, 'kept');
-  assert.equal(brokePromiseTo(kept, 'S'), false);
-  assert.equal(brokePromiseTo(kept, 'N'), true);
-  const friend = advance(choose(before, '17-pasha'));
-  assert.equal(availableChoices(friend)[0].text, 'Предложить выйти подышать');
-  assert.equal(choose(friend, '18-dance').P, friend.P);
-  const lera = advance(choose(before, '17-lera'));
-  assert.deepEqual(choose(lera, '18-dance').response.replies, [{speaker:'L', text:'Не здесь'}]);
-});
-
-test('invitation and physical contact honor the exact score boundaries', () => {
-  assert.equal(canInvite({L: 1, J: 3}, 'L'), true);
-  assert.equal(canInvite({L: 1, J: 4}, 'L'), false);
-  assert.equal(canInvite({N: 0}, 'N'), false);
-  assert.equal(canInvite({S: 0}, 'S'), false);
-  const pending = (node, stats, choice) => choose({...start(), node, ...stats}, choice).response.replies;
-  assert.equal(pending('25N', {N: 2}, '25N-hand')[0].text, 'Давай не спешить');
-  assert.match(pending('25N', {N: 3}, '25N-hand')[0].text, /соглашается/);
-  assert.equal(pending('25S', {S: 2}, '25S-kiss')[0].text, 'Не торопись');
-  assert.equal(pending('25S', {S: 3}, '25S-kiss')[0].text, 'Можно');
-  assert.match(pending('25S', {S: 1}, '25S-hug')[0].text, /без этого/);
-  assert.match(pending('25S', {S: 2}, '25S-hug')[0].text, /соглашается/);
+test('all placeholders resolve to existing WebP, missing audio stays silent', () => {
+  for (const [key, entry] of Object.entries(graphics)) {
+    const path = graphic(key);
+    assert.match(entry.path, /\.webp$/);
+    assert.ok(path && existsSync(new URL(`../${path}`, import.meta.url)), key);
+    if (entry.kind === 'background') assert.ok(locations[entry.scene]);
+  }
+  assert.equal(hasAudio, false);
+  assert.ok(Object.values(sounds).every(entry => entry.status === 'missing'));
 });
